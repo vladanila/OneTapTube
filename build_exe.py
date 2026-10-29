@@ -20,6 +20,7 @@ if __name__ == '__main__':
         '--onefile',
         '--icon', 'icon.ico',
         '--add-data', 'icon.ico;.',
+        '--add-data', 'app_icon.png;.',
         '--collect-all', 'customtkinter',
         '--collect-all', 'pystray',
         '--hidden-import', 'pystray._win32',
