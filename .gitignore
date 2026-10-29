@@ -1,0 +1,22 @@
+# Local personal downloads
+downloads/
+
+# External engine binaries (ffmpeg.exe is 222MB which exceeds GitHub's 100MB limit)
+# Note: Binaries are distributed via GitHub Releases or auto-installed by OneTapTube
+bin/
+
+# PyInstaller & Python build artifacts
+build/
+dist/
+__pycache__/
+*.spec
+*.pyc
+
+# Local runtime config
+config.json
+
+# IDE & OS files
+.vscode/
+.idea/
+Thumbs.db
+Desktop.ini
