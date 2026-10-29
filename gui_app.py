@@ -1083,17 +1083,40 @@ class MusicDownloaderApp(ctk.CTk):
         self.show_clipboard_toast("All components installed! OneTapTube is ready.")
 
     # Visual Clipboard Toast Banner Notification
-    def show_clipboard_toast(self, text: str, is_success: bool = True):
+    def show_clipboard_toast(self, text: str, is_success: bool = True, on_click=None):
         self.toast_banner.configure(
             text=f"  ✓ {text}  " if is_success else f"  ✕ {text}  ",
             fg_color="#064E3B" if is_success else "#7F1D1D",
             text_color="#34D399" if is_success else "#FCA5A5",
             height=28
         )
+        try:
+            self.toast_banner.unbind("<Button-1>")
+        except Exception:
+            pass
+        if on_click:
+            self.toast_banner.bind("<Button-1>", lambda e: on_click())
+            try:
+                self.toast_banner.configure(cursor="hand2")
+            except Exception:
+                pass
+        else:
+            try:
+                self.toast_banner.configure(cursor="")
+            except Exception:
+                pass
         self.after(3500, self._hide_clipboard_toast)
 
     def _hide_clipboard_toast(self):
+        try:
+            self.toast_banner.unbind("<Button-1>")
+        except Exception:
+            pass
         self.toast_banner.configure(text="", fg_color="transparent", height=0)
+        try:
+            self.toast_banner.configure(cursor="")
+        except Exception:
+            pass
 
     # --- Recent Downloads with Audio Preview Player ---
     def add_history_entry(self, artist: str, title: str, tag_text: str, file_path: str = None, is_skipped: bool = False):
@@ -1309,30 +1332,27 @@ class MusicDownloaderApp(ctk.CTk):
         self.url_entry.delete(0, "end")
 
     def handle_incoming_url(self, text: str, source: str = "Clipboard"):
-        """Checks if URL is a playlist or a single song, offering full album download."""
+        """Checks if URL is a single song or dedicated playlist, ensuring seamless 1-click single-song downloads."""
         playlist_match = YOUTUBE_PLAYLIST_REGEX.search(text)
         video_matches = YOUTUBE_VIDEO_REGEX.findall(text)
 
-        # Detect pure playlist / album URL (or playlist with song)
-        if playlist_match:
-            playlist_id = playlist_match.group(1)
-            # If it's a YouTube Music auto-generated endless radio mix ("RD..."), default to just the single track
-            if playlist_id.startswith("RD") and video_matches:
-                for vid in video_matches:
-                    self.queue_video(vid, source=source)
-                return
-
-            # Dedicated playlist / album: Prompt user to download entire playlist or single track
-            self.prompt_playlist_download(playlist_id, single_vid=video_matches[0] if video_matches else None)
+        # 1. If link contains a specific song/video ID (e.g. watch?v=... or watch?v=...&list=...)
+        # Prioritize downloading that single song immediately without any modal popups or interruptions.
+        if video_matches:
+            playlist_id = playlist_match.group(1) if playlist_match else None
+            for vid in video_matches:
+                self.queue_video(vid, source=source, album_id=playlist_id)
             return
 
-        # Single video / song
-        if video_matches:
-            for vid in video_matches:
-                self.queue_video(vid, source=source)
-        else:
-            if source == "Manual":
-                self.show_clipboard_toast("Please enter a valid YouTube or YouTube Music song or playlist link", is_success=False)
+        # 2. Pure playlist / album URL (e.g. youtube.com/playlist?list=... with NO single video ID)
+        # The user explicitly copied the whole playlist, so open the playlist batch downloader.
+        if playlist_match:
+            playlist_id = playlist_match.group(1)
+            self.prompt_playlist_download(playlist_id, single_vid=None)
+            return
+
+        if source == "Manual":
+            self.show_clipboard_toast("Please enter a valid YouTube or YouTube Music song or playlist link", is_success=False)
 
     def prompt_playlist_download(self, playlist_id: str, single_vid: str = None):
         """Displays interactive modal to download full album / playlist."""
@@ -1457,14 +1477,20 @@ class MusicDownloaderApp(ctk.CTk):
 
         threading.Thread(target=fetch_tracks, daemon=True).start()
 
-    def queue_video(self, video_id: str, source: str = "Clipboard", title_hint: str = None):
+    def queue_video(self, video_id: str, source: str = "Clipboard", title_hint: str = None, album_id: str = None):
         with self.lock:
             if video_id not in self.currently_queued:
                 self.currently_queued.add(video_id)
                 self.download_queue.put((video_id, title_hint))
                 self.after(0, self.update_queue_badge)
                 if source == "Clipboard":
-                    self.after(0, lambda: self.show_clipboard_toast(f"Song queued: https://music.youtube.com/watch?v={video_id}"))
+                    if album_id and not album_id.startswith("RD"):
+                        self.after(0, lambda a_id=album_id: self.show_clipboard_toast(
+                            "Song queued! • Album detected (click here to download full album)",
+                            on_click=lambda: self.prompt_playlist_download(a_id)
+                        ))
+                    else:
+                        self.after(0, lambda: self.show_clipboard_toast(f"Song queued: https://music.youtube.com/watch?v={video_id}"))
 
     # Clipboard Monitoring: Thread-Safe Native Windows Hook (Zero GUI Thread Contention)
     def clipboard_monitor(self):
