@@ -21,6 +21,8 @@ if __name__ == '__main__':
         '--icon', 'icon.ico',
         '--add-data', 'icon.ico;.',
         '--collect-all', 'customtkinter',
+        '--collect-all', 'pystray',
+        '--hidden-import', 'pystray._win32',
         '--hidden-import', 'unicodedata',
         '--hidden-import', 'sqlite3',
         '--hidden-import', 'ssl',
