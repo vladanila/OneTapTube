@@ -50,12 +50,52 @@ import customtkinter as ctk
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
 
-# Regular Expressions
-YOUTUBE_VIDEO_REGEX = re.compile(r'(?:https?:\/\/)?(?:music\.)?youtu(?:be\.com\/(?:watch\?v=|shorts\/)|\.be\/)([a-zA-Z0-9_-]{11})')
-YOUTUBE_PLAYLIST_REGEX = re.compile(r'(?:https?:\/\/)?(?:music\.)?youtu(?:be\.com|\.be).*?[?&]list=([a-zA-Z0-9_-]+)')
+# Regular Expressions (Bulletproof matching for modern YouTube share URLs, shorts, music, and playlists)
+YOUTUBE_VIDEO_REGEX = re.compile(
+    r'(?:https?:\/\/)?(?:[a-zA-Z0-9_-]+\.)?youtu(?:be\.com\/(?:watch\?.*?\bv=|(?:shorts|live|embed)\/)|(?:\.be\/))([a-zA-Z0-9_-]{11})'
+)
+YOUTUBE_PLAYLIST_REGEX = re.compile(
+    r'(?:https?:\/\/)?(?:[a-zA-Z0-9_-]+\.)?youtu(?:be\.com|\.be).*?[?&]list=([a-zA-Z0-9_-]+)'
+)
 
 YTDLP_DOWNLOAD_URL = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe"
 FFMPEG_DOWNLOAD_URL = "https://github.com/yt-dlp/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip"
+
+
+# --- Native Windows Clipboard Access (Thread-Safe & Immune to Tkinter GUI Locking) ---
+def get_native_clipboard_text() -> str:
+    """Reads text directly from the Windows OS clipboard without touching Tkinter GUI threads."""
+    try:
+        user32 = ctypes.windll.user32
+        kernel32 = ctypes.windll.kernel32
+        user32.OpenClipboard.argtypes = [ctypes.c_void_p]
+        user32.OpenClipboard.restype = ctypes.c_bool
+        user32.CloseClipboard.argtypes = []
+        user32.CloseClipboard.restype = ctypes.c_bool
+        user32.GetClipboardData.argtypes = [ctypes.c_uint]
+        user32.GetClipboardData.restype = ctypes.c_void_p
+        kernel32.GlobalLock.argtypes = [ctypes.c_void_p]
+        kernel32.GlobalLock.restype = ctypes.c_void_p
+        kernel32.GlobalUnlock.argtypes = [ctypes.c_void_p]
+        kernel32.GlobalUnlock.restype = ctypes.c_bool
+
+        CF_UNICODETEXT = 13
+        if user32.OpenClipboard(None):
+            try:
+                h_mem = user32.GetClipboardData(CF_UNICODETEXT)
+                if h_mem:
+                    p_mem = kernel32.GlobalLock(h_mem)
+                    if p_mem:
+                        try:
+                            val = ctypes.c_wchar_p(p_mem).value
+                            return (val or "").strip()
+                        finally:
+                            kernel32.GlobalUnlock(h_mem)
+            finally:
+                user32.CloseClipboard()
+    except Exception:
+        pass
+    return ""
 
 
 # --- Native Windows Audio Player (Hybrid MCI + PresentationCore) ---
@@ -75,39 +115,48 @@ class WindowsAudioPlayer:
 
         ext = os.path.splitext(file_path)[1].lower()
 
-        # If MP3, use ultra-fast native MCI
+        # If MP3, first attempt ultra-fast native MCI
         if ext == ".mp3":
-            buf = ctypes.create_unicode_buffer(1024)
-            ctypes.windll.kernel32.GetShortPathNameW(file_path, buf, 1024)
-            short_path = buf.value or file_path
-
-            cmd_open = f'open "{short_path}" type mpegvideo alias {self.alias}'
-            res = self.winmm.mciSendStringW(cmd_open, None, 0, None)
-            if res == 0:
-                self.winmm.mciSendStringW(f'play {self.alias}', None, 0, None)
-                self.is_playing = True
-                self.current_path = file_path
-                return True
-            return False
-        else:
-            # For M4A/FLAC/AAC, use Windows PresentationCore MediaPlayer background process
             try:
-                clean_path = os.path.abspath(file_path).replace("\\", "/").replace("'", "''")
-                ps_cmd = f"Add-Type -AssemblyName presentationCore; $p = New-Object System.Windows.Media.MediaPlayer; $p.Open('{clean_path}'); $p.Play(); Start-Sleep -Seconds 600"
-                startupinfo = subprocess.STARTUPINFO()
-                startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-                startupinfo.wShowWindow = subprocess.SW_HIDE
+                buf = ctypes.create_unicode_buffer(1024)
+                ctypes.windll.kernel32.GetShortPathNameW(file_path, buf, 1024)
+                short_path = buf.value or file_path
 
-                self.ps_proc = subprocess.Popen(
-                    ["powershell", "-NoProfile", "-NonInteractive", "-Command", ps_cmd],
-                    startupinfo=startupinfo,
-                    creationflags=subprocess.CREATE_NO_WINDOW
-                )
-                self.is_playing = True
-                self.current_path = file_path
-                return True
+                cmd_open = f'open "{short_path}" type mpegvideo alias {self.alias}'
+                res = self.winmm.mciSendStringW(cmd_open, None, 0, None)
+                if res == 0:
+                    self.winmm.mciSendStringW(f'play {self.alias}', None, 0, None)
+                    self.is_playing = True
+                    self.current_path = file_path
+                    return True
             except Exception:
-                return False
+                pass
+
+        # For M4A/FLAC/AAC (or MP3 fallback if MCI fails), use Windows PresentationCore MediaPlayer
+        try:
+            clean_path = os.path.abspath(file_path).replace("\\", "/").replace("'", "''")
+            ps_cmd = (
+                "Add-Type -AssemblyName WindowsBase; "
+                "Add-Type -AssemblyName PresentationCore; "
+                "$p = New-Object System.Windows.Media.MediaPlayer; "
+                f"$p.Open([System.Uri]'{clean_path}'); "
+                "$p.Play(); "
+                "Start-Sleep -Seconds 600"
+            )
+            startupinfo = subprocess.STARTUPINFO()
+            startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+            startupinfo.wShowWindow = subprocess.SW_HIDE
+
+            self.ps_proc = subprocess.Popen(
+                ["powershell", "-NoProfile", "-NonInteractive", "-Command", ps_cmd],
+                startupinfo=startupinfo,
+                creationflags=subprocess.CREATE_NO_WINDOW
+            )
+            self.is_playing = True
+            self.current_path = file_path
+            return True
+        except Exception:
+            return False
 
     def stop(self):
         try:
@@ -201,6 +250,11 @@ class ModernToolTip:
     def show_tip(self):
         self.after_id = None
         if self.tip_window or not self.widget.winfo_exists():
+            return
+        try:
+            if not self.widget.winfo_viewable():
+                return
+        except Exception:
             return
         try:
             if self.last_x is not None and self.last_y is not None:
@@ -368,6 +422,7 @@ class MusicDownloaderApp(ctk.CTk):
         self.lock = threading.Lock()
         self.running = True
         self.active_workers_count = 0
+        self.active_display_worker = None
 
         # Build UI
         self.create_widgets()
@@ -444,7 +499,7 @@ class MusicDownloaderApp(ctk.CTk):
                 tray_image = Image.new('RGB', (64, 64), color=(30, 136, 229))
 
             menu = pystray.Menu(
-                pystray.MenuItem("OneTapTube v1.2.0", lambda: None, enabled=False),
+                pystray.MenuItem("OneTapTube v1.3.0", lambda: None, enabled=False),
                 pystray.Menu.SEPARATOR,
                 pystray.MenuItem("Open OneTapTube", self.restore_from_tray, default=True),
                 pystray.MenuItem("Open Downloads Folder", lambda: self.after(0, self.on_open_folder)),
@@ -1411,22 +1466,23 @@ class MusicDownloaderApp(ctk.CTk):
                 if source == "Clipboard":
                     self.after(0, lambda: self.show_clipboard_toast(f"Song queued: https://music.youtube.com/watch?v={video_id}"))
 
-    # Clipboard Monitoring: Triggers ONLY on actual clipboard change
+    # Clipboard Monitoring: Thread-Safe Native Windows Hook (Zero GUI Thread Contention)
     def clipboard_monitor(self):
         last_clipboard_text = ""
         try:
-            last_clipboard_text = self.clipboard_get().strip()
+            last_clipboard_text = get_native_clipboard_text() or self.clipboard_get().strip()
         except Exception:
             pass
 
         while self.running:
             if self.config.get("auto_clipboard", True):
                 try:
-                    clip = ""
-                    try:
-                        clip = self.clipboard_get().strip()
-                    except Exception:
-                        pass
+                    clip = get_native_clipboard_text()
+                    if not clip:
+                        try:
+                            clip = self.clipboard_get().strip()
+                        except Exception:
+                            clip = ""
 
                     if clip and clip != last_clipboard_text:
                         last_clipboard_text = clip
@@ -1485,11 +1541,18 @@ class MusicDownloaderApp(ctk.CTk):
             return
 
         url = f"https://music.youtube.com/watch?v={video_id}"
-
         display_name = title_hint if title_hint else f"Song ID: {video_id}"
-        self.after(0, lambda: self.song_title_label.configure(text=f"🎵 {display_name}"))
-        self.after(0, lambda: self.status_detail_label.configure(text=f"Status: Downloading ({tag_label})..."))
-        self.after(0, lambda: self.progress_bar.set(0.08))
+
+        # Assign leader worker to smoothly drive single-song progress bar without flicker
+        with self.lock:
+            if self.active_display_worker is None:
+                self.active_display_worker = worker_id
+            is_leader = (self.active_display_worker == worker_id)
+
+        if is_leader:
+            self.after(0, lambda: self.song_title_label.configure(text=f"🎵 {display_name}"))
+            self.after(0, lambda: self.status_detail_label.configure(text=f"Status: Downloading ({tag_label})..."))
+            self.after(0, lambda: self.progress_bar.set(0.08))
 
         os.makedirs(target_dir, exist_ok=True)
 
@@ -1502,12 +1565,14 @@ class MusicDownloaderApp(ctk.CTk):
             "--progress",
             "-x",
             "--audio-format", target_format,
+            "--sponsorblock-remove", "music_offtopic,sponsor",
             "--windows-filenames",
             "--no-playlist",
             "-o", out_template,
             "--newline",
             "--progress-template", "download:PROGRESS:%(progress._percent_str)s",
-            "--print", "before_dl:METADATA:%(artist,creator,channel,uploader)s|||%(title)s"
+            "--print", "before_dl:METADATA:%(artist,creator,channel,uploader)s|||%(title)s",
+            "--print", "after_move:SAVED_PATH:%(filepath)s"
         ]
 
         if target_format == "mp3":
@@ -1535,6 +1600,7 @@ class MusicDownloaderApp(ctk.CTk):
         last_error_line = ""
         is_already_downloaded = False
         saved_file_path = None
+        start_time = time.time()
 
         try:
             proc = subprocess.Popen(
@@ -1553,79 +1619,117 @@ class MusicDownloaderApp(ctk.CTk):
                 if not line:
                     continue
 
-                if line.startswith("METADATA:"):
+                if line.startswith("SAVED_PATH:"):
+                    p = line.replace("SAVED_PATH:", "").strip()
+                    if os.path.exists(p) and os.path.getsize(p) > 1000:
+                        saved_file_path = p
+
+                elif line.startswith("METADATA:"):
                     raw_meta = line.replace("METADATA:", "").strip()
                     parts = raw_meta.split("|||")
                     if len(parts) >= 2:
                         artist_name = parts[0].strip() or "Unknown Artist"
                         song_title = parts[1].strip() or "Unknown Title"
-                        self.after(0, lambda a=artist_name, t=song_title: self.song_title_label.configure(text=f"🎵 {a} - {t}"))
+                        if self.active_display_worker == worker_id:
+                            self.after(0, lambda a=artist_name, t=song_title: self.song_title_label.configure(text=f"🎵 {a} - {t}"))
 
                 elif line.startswith("PROGRESS:"):
                     pct_str = line.replace("PROGRESS:", "").replace("%", "").strip()
                     try:
                         pct = float(pct_str) / 100.0
                         pct_clamped = min(max(pct, 0.05), 0.95)
-                        self.after(0, lambda p=pct_clamped: self.progress_bar.set(p))
-                        self.after(0, lambda ps=pct_str: self.status_detail_label.configure(
-                            text=f"Status: Downloading stream ({ps}%)..."
-                        ))
+                        if self.active_display_worker == worker_id:
+                            self.after(0, lambda p=pct_clamped: self.progress_bar.set(p))
+                            self.after(0, lambda ps=pct_str: self.status_detail_label.configure(
+                                text=f"Status: Downloading stream ({ps}%)..."
+                            ))
                     except ValueError:
                         pass
 
-                elif "[ExtractAudio]" in line or "[Metadata]" in line or "[ThumbnailsConvertor]" in line:
-                    self.after(0, lambda: self.progress_bar.set(0.96))
-                    self.after(0, lambda: self.status_detail_label.configure(text="Status: Packaging audio & tags..."))
+                elif "[SponsorBlock]" in line:
+                    if "removing" in line.lower() or "found" in line.lower():
+                        if self.active_display_worker == worker_id:
+                            self.after(0, lambda: self.status_detail_label.configure(text="Status: Trimming non-music intro/skit (SponsorBlock)..."))
+
+                elif "[ExtractAudio]" in line or "[Metadata]" in line or "[ThumbnailsConvertor]" in line or "[ModifyChapters]" in line:
+                    if self.active_display_worker == worker_id:
+                        self.after(0, lambda: self.progress_bar.set(0.96))
+                        self.after(0, lambda: self.status_detail_label.configure(text="Status: Packaging audio & tags..."))
 
                 elif "has already been downloaded" in line.lower() or "already exists" in line.lower():
                     is_already_downloaded = True
+                    match = re.search(r'\[download\]\s+(.*?)\s+has already been downloaded', line, re.IGNORECASE)
+                    if match:
+                        extracted = match.group(1).strip('"\'')
+                        if os.path.exists(extracted):
+                            saved_file_path = extracted
 
                 elif "ERROR:" in line or "error:" in line:
                     last_error_line = line
 
             proc.wait()
 
-            # Find output file in destination directory
+            # Find output file if not captured directly via SAVED_PATH
             ext = target_format
-            expected_filename = f"{artist_name} - {song_title}.{ext}"
-            candidate_path = os.path.join(target_dir, expected_filename)
-            if os.path.exists(candidate_path):
-                saved_file_path = candidate_path
-            else:
-                try:
-                    clean_t = "".join(c for c in song_title if c.isalnum()).lower()
-                    for f in os.listdir(target_dir):
-                        if f.endswith(f".{ext}"):
-                            clean_f = "".join(c for c in f if c.isalnum()).lower()
-                            if clean_t and clean_t in clean_f:
-                                saved_file_path = os.path.join(target_dir, f)
-                                break
-                    if not saved_file_path:
-                        matched_files = [os.path.join(target_dir, f) for f in os.listdir(target_dir) if f.endswith(f".{ext}")]
-                        if matched_files:
-                            saved_file_path = max(matched_files, key=os.path.getmtime)
-                except Exception:
-                    pass
+            if not saved_file_path:
+                expected_filename = f"{artist_name} - {song_title}.{ext}"
+                candidate_path = os.path.join(target_dir, expected_filename)
+                if os.path.exists(candidate_path):
+                    saved_file_path = candidate_path
+                else:
+                    try:
+                        clean_t = "".join(c for c in song_title if c.isalnum()).lower()
+                        for f in os.listdir(target_dir):
+                            if f.endswith(f".{ext}"):
+                                clean_f = "".join(c for c in f if c.isalnum()).lower()
+                                if clean_t and clean_t in clean_f:
+                                    saved_file_path = os.path.join(target_dir, f)
+                                    break
+                        if not saved_file_path:
+                            recent_files = [
+                                os.path.join(target_dir, f)
+                                for f in os.listdir(target_dir)
+                                if f.endswith(f".{ext}") and os.path.getmtime(os.path.join(target_dir, f)) >= start_time - 2
+                            ]
+                            if recent_files:
+                                saved_file_path = max(recent_files, key=os.path.getmtime)
+                    except Exception:
+                        pass
 
-            if proc.returncode == 0 or is_already_downloaded:
+            # Relinquish leader worker so next active download can update progress bar cleanly
+            with self.lock:
+                was_leader = (self.active_display_worker == worker_id)
+                if was_leader:
+                    self.active_display_worker = None
+
+            is_file_valid = bool(saved_file_path and os.path.exists(saved_file_path) and os.path.getsize(saved_file_path) > 1000)
+            is_success = (proc.returncode == 0 or is_already_downloaded or is_file_valid)
+
+            if is_success:
                 if is_already_downloaded:
                     status_text = "Status: ⏩ Already exists in folder (Skipped)"
-                    self.after(0, lambda a=artist_name, t=song_title: self.song_title_label.configure(text=f"🎵 {a} - {t}"))
-                    self.after(0, lambda st=status_text: self.status_detail_label.configure(text=st))
-                    self.after(0, lambda: self.progress_bar.set(1.0))
+                    if was_leader or self.active_workers_count <= 1:
+                        self.after(0, lambda a=artist_name, t=song_title: self.song_title_label.configure(text=f"🎵 {a} - {t}"))
+                        self.after(0, lambda st=status_text: self.status_detail_label.configure(text=st))
+                        self.after(0, lambda: self.progress_bar.set(1.0))
                     self.after(0, lambda a=artist_name, t=song_title, fp=saved_file_path: self.add_history_entry(a, t, tag_label, fp, is_skipped=True))
                 else:
-                    self.after(0, lambda a=artist_name, t=song_title: self.song_title_label.configure(text=f"🎵 {a} - {t}"))
-                    self.after(0, lambda: self.status_detail_label.configure(text=f"Status: ✓ Successfully Saved ({tag_label})"))
-                    self.after(0, lambda: self.progress_bar.set(1.0))
+                    if was_leader or self.active_workers_count <= 1:
+                        self.after(0, lambda a=artist_name, t=song_title: self.song_title_label.configure(text=f"🎵 {a} - {t}"))
+                        self.after(0, lambda: self.status_detail_label.configure(text=f"Status: ✓ Successfully Saved ({tag_label})"))
+                        self.after(0, lambda: self.progress_bar.set(1.0))
                     self.after(0, lambda a=artist_name, t=song_title, fp=saved_file_path: self.add_history_entry(a, t, tag_label, fp, is_skipped=False))
                     self.show_tray_notification("OneTapTube Download Complete", f"✓ Saved: {artist_name} - {song_title}")
             else:
-                err_text = f"Status: ✕ Download failed. {last_error_line}" if last_error_line else "Status: ✕ Download failed. Check link or connection."
-                self.after(0, lambda et=err_text: self.status_detail_label.configure(text=et))
-                self.after(0, lambda: self.progress_bar.set(0.0))
+                if was_leader or self.active_workers_count <= 1:
+                    err_text = f"Status: ✕ Download failed. {last_error_line}" if last_error_line else "Status: ✕ Download failed. Check link or connection."
+                    self.after(0, lambda et=err_text: self.status_detail_label.configure(text=et))
+                    self.after(0, lambda: self.progress_bar.set(0.0))
 
         except Exception as e:
+            with self.lock:
+                if self.active_display_worker == worker_id:
+                    self.active_display_worker = None
             self.after(0, lambda err=str(e): self.status_detail_label.configure(text=f"Status: ✕ Error: {err}"))
             self.after(0, lambda: self.progress_bar.set(0.0))
 

@@ -32,8 +32,11 @@ OneTapTube is an offline audio extraction client tailored for speed, simplicity,
 ## Key Features
 
 - **Automated Clipboard Pipeline**: Real-time clipboard polling automatically detects YouTube and YouTube Music tracks and queues downloads instantly upon copying (`Ctrl + C`).
+- **Native Win32 Clipboard Isolation**: Employs direct Windows API Unicode clipboard access, guaranteeing zero GUI thread contention or UI freezes during background polling.
+- **Smart Intro & Skit Removal (SponsorBlock)**: Cleans downloaded audio tracks of non-music intro/outro dialogue, music video acting skits, and sponsor interruptions automatically.
 - **Lightning M4A Audio Mode**: Remuxes native YouTube AAC streams (`format 140`) into `.m4a` containers in approximately one second with zero lossy transcoding.
 - **Universal Format Selection**: Supports MP3 (custom bitrates from 64 kbps to 320 kbps), M4A (untouched stream), and FLAC (lossless).
+- **Multi-Threaded Turbo Processing**: Concurrently processes up to 3 downloads with intelligent single-leader progress bar stabilization.
 - **Batch Playlist & Album Downloader**: Automatically identifies playlist and album URLs, providing one-click batch queuing and download progress tracking for entire tracklists.
 - **Integrated Audio Preview Player**: Features a lightweight native Windows audio preview engine directly within the download history table, enabling immediate track verification without third-party media players.
 - **Intelligent Deduplication**: Scans target directories prior to downloading to skip existing tracks, conserving network bandwidth and avoiding redundant disk writes.
