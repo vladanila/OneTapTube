@@ -6,7 +6,7 @@
 
 <p align="center">
   <b>A high-performance Windows desktop audio downloader and archiver for YouTube & YouTube Music.</b><br>
-  Features automated clipboard monitoring, direct M4A stream remuxing, batch album processing, in-app audio preview, and native system tray integration.
+  Features automated clipboard monitoring, smart studio metadata & square artwork enrichment, direct M4A stream remuxing, batch album processing, in-app audio preview, and native system tray integration.
 </p>
 
 <p align="center">
@@ -31,7 +31,9 @@ OneTapTube is an offline audio extraction client tailored for speed, simplicity,
 
 ## Key Features
 
+- **Apple-Inspired Dark Aesthetic**: Modern, clean, uncluttered interface inspired by Apple macOS/iOS design principles with pure OLED black surfaces (`#000000`), elevated card surfaces (`#121215`), hairline borders, and vibrant Apple Electric Blue accents (`#0A84FF`).
 - **Automated Clipboard Pipeline**: Real-time clipboard polling automatically detects YouTube and YouTube Music tracks and queues downloads instantly upon copying (`Ctrl + C`).
+- **Smart Studio Metadata & Square Artwork Enhancer**: Automatically cleans YouTube video suffixes (e.g. `[Official Music Video]`, `(4K Remaster)`) and embeds official studio metadata (clean Song Title, Artist, Album Name, Release Year, Track Number, and 1:1 high-resolution square cover art) with zero black bars.
 - **Native Win32 Clipboard Isolation**: Employs direct Windows API Unicode clipboard access, guaranteeing zero GUI thread contention or UI freezes during background polling.
 - **Smart Intro & Skit Removal (SponsorBlock)**: Cleans downloaded audio tracks of non-music intro/outro dialogue, music video acting skits, and sponsor interruptions automatically.
 - **Lightning M4A Audio Mode**: Remuxes native YouTube AAC streams (`format 140`) into `.m4a` containers in approximately one second with zero lossy transcoding.
@@ -51,7 +53,7 @@ OneTapTube is an offline audio extraction client tailored for speed, simplicity,
 
 | Component | Technology | Description |
 | :--- | :--- | :--- |
-| **Graphical Interface** | CustomTkinter | Modern dark-themed user interface |
+| **Graphical Interface** | CustomTkinter | Apple-inspired dark mode interface with OLED black & Electric Blue design language |
 | **Extraction Engine** | Standalone `yt-dlp` | Headless, decoupled audio stream retrieval |
 | **Audio Processing** | FFmpeg | Audio conversion, remuxing, and metadata embedding |
 | **Audio Playback** | Windows MCI & PresentationCore | Hybrid low-latency native Windows audio preview |

@@ -8,6 +8,7 @@ import shutil
 import zipfile
 import threading
 import urllib.request
+import urllib.parse
 import subprocess
 import multiprocessing
 import ctypes
@@ -50,7 +51,54 @@ import customtkinter as ctk
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
 
-# Regular Expressions (Bulletproof matching for modern YouTube share URLs, shorts, music, and playlists)
+# ==============================================================================
+# --- Apple Dark Design System & Theme Tokens ---
+# ==============================================================================
+FONT_FAMILY = "Segoe UI"
+
+# Surfaces & Backgrounds
+COLOR_BG_BASE = "#000000"         # Pure OLED Black (App Window Background)
+COLOR_CARD_BG = "#121215"         # Elevated Apple Card Surface (Dark Obsidian)
+COLOR_CARD_BORDER = "#222226"     # Hairline Border (1px)
+COLOR_CARD_HOVER = "#18181C"      # Subtle Card Hover State
+COLOR_SUB_SURFACE = "#18181B"     # Input fields & nested rows
+COLOR_SUB_BORDER = "#2A2A2F"      # Nested row / input borders
+COLOR_SEPARATOR = "#1E1E22"       # Subtle divider lines
+
+# Typography
+COLOR_TEXT_PRIMARY = "#FFFFFF"    # Crisp White (Headings, active labels)
+COLOR_TEXT_SECONDARY = "#8E8E93"  # Apple Neutral Gray (Subtitles, statuses)
+COLOR_TEXT_MUTED = "#636366"      # Dark Neutral Gray (Placeholders, hints)
+
+# Apple System Accent: Electric Blue
+COLOR_ACCENT_BLUE = "#0A84FF"         # Apple System Blue
+COLOR_ACCENT_BLUE_HOVER = "#0071E3"   # Hover state
+COLOR_ACCENT_BLUE_ACTIVE = "#005BB5"  # Pressed state
+COLOR_ACCENT_BLUE_TINT = "#0D223A"    # Translucent Blue badge fill
+COLOR_ACCENT_BLUE_TEXT = "#389BFF"    # High-legibility text on dark tint
+
+# Apple System Accent: Green (Success / Active)
+COLOR_ACCENT_GREEN = "#30D158"        # Apple System Green
+COLOR_ACCENT_GREEN_HOVER = "#24A845"  # Hover state
+COLOR_ACCENT_GREEN_TINT = "#0F2B1D"   # Translucent Green badge fill
+
+# Apple System Accent: Amber / Orange (Warning / Skipped)
+COLOR_ACCENT_AMBER = "#FF9F0A"        # Apple System Orange
+COLOR_ACCENT_AMBER_TINT = "#2E2108"   # Translucent Amber badge fill
+
+# Apple System Accent: Red (Error / Destructive)
+COLOR_ACCENT_RED = "#FF453A"          # Apple System Red
+COLOR_ACCENT_RED_HOVER = "#D93328"    # Hover state
+COLOR_ACCENT_RED_TINT = "#2E1114"     # Translucent Red badge fill
+COLOR_ACCENT_RED_BORDER = "#5C1D22"   # Red border
+
+# Apple Secondary Controls (Pills / Menus / Secondary Buttons)
+COLOR_CONTROL_BG = "#1C1C1E"          # Apple secondary button surface
+COLOR_CONTROL_BORDER = "#28282D"      # Control border
+COLOR_CONTROL_HOVER = "#2C2C2E"       # Control hover surface
+COLOR_CONTROL_ACTIVE = "#3A3A3C"      # Control active / dropdown hover
+
+# Regular Expressions (Bulletproof matching for modern YouTube & YouTube Music URLs)
 YOUTUBE_VIDEO_REGEX = re.compile(
     r'(?:https?:\/\/)?(?:[a-zA-Z0-9_-]+\.)?youtu(?:be\.com\/(?:watch\?.*?\bv=|(?:shorts|live|embed)\/)|(?:\.be\/))([a-zA-Z0-9_-]{11})'
 )
@@ -60,6 +108,198 @@ YOUTUBE_PLAYLIST_REGEX = re.compile(
 
 YTDLP_DOWNLOAD_URL = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe"
 FFMPEG_DOWNLOAD_URL = "https://github.com/yt-dlp/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip"
+
+
+# --- Smart Studio Metadata & Square Artwork Enhancer ---
+def clean_youtube_query(raw_title: str, raw_artist: str = "") -> tuple:
+    """Extracts clean artist and title from noisy YouTube titles by stripping video suffixes and tags."""
+    patterns = [
+        r'\[.*?\]',
+        r'\((?:official\s*)?(?:music\s*)?(?:video|audio|lyric\s*video|visualizer|hd|4k)\)',
+        r'\((?:remaster(?:ed)?|clean\s*version|radio\s*edit).*?\)',
+        r'\((?:lyrics?|audio|visualizer)\)',
+        r'\|.*$',
+        r'//.*$',
+        r'\bofficial\s*(music\s*)?video\b',
+        r'\bofficial\s*audio\b',
+        r'\b4k\b|\bhd\b|\bremaster(ed)?\b',
+        r'\(\s*\)',
+    ]
+    cleaned_title = raw_title or ""
+    for p in patterns:
+        cleaned_title = re.sub(p, '', cleaned_title, flags=re.IGNORECASE)
+    cleaned_title = re.sub(r'\s+', ' ', cleaned_title).strip(' -[]()')
+
+    # Strip common automated YouTube Music channel/uploader suffixes (e.g. "Coldplay - Topic", "Queen Official", "TaylorSwiftVEVO")
+    cleaned_raw_artist = raw_artist if raw_artist and raw_artist != "Unknown Artist" else ""
+    if cleaned_raw_artist:
+        cleaned_raw_artist = re.sub(r'\s*-\s*topic\b', '', cleaned_raw_artist, flags=re.IGNORECASE)
+        cleaned_raw_artist = re.sub(r'vevo\b', '', cleaned_raw_artist, flags=re.IGNORECASE)
+        cleaned_raw_artist = re.sub(r'\s*-\s*official\b', '', cleaned_raw_artist, flags=re.IGNORECASE)
+        cleaned_raw_artist = re.sub(r'\s+official\b', '', cleaned_raw_artist, flags=re.IGNORECASE)
+        cleaned_raw_artist = cleaned_raw_artist.strip(' -')
+
+    extracted_artist = cleaned_raw_artist
+    extracted_title = cleaned_title
+    if " - " in cleaned_title:
+        parts = cleaned_title.split(" - ", 1)
+        extracted_artist = parts[0].strip()
+        extracted_title = parts[1].strip()
+
+    if extracted_artist:
+        extracted_artist = re.sub(r'\s*-\s*topic\b', '', extracted_artist, flags=re.IGNORECASE)
+        extracted_artist = re.sub(r'vevo\b', '', extracted_artist, flags=re.IGNORECASE)
+        extracted_artist = re.sub(r'\s*-\s*official\b', '', extracted_artist, flags=re.IGNORECASE)
+        extracted_artist = re.sub(r'\s+official\b', '', extracted_artist, flags=re.IGNORECASE)
+        extracted_artist = extracted_artist.strip(' -')
+
+    search_query = f"{extracted_artist} {extracted_title}".strip()
+    return extracted_artist, extracted_title, search_query
+
+
+def fetch_studio_metadata(artist: str = "", title: str = "") -> dict:
+    """Queries official studio music catalog for pristine title, artist, album, release year, and square artwork."""
+    clean_art, clean_tit, query = clean_youtube_query(raw_title=title, raw_artist=artist)
+    if not query:
+        return None
+
+    try:
+        encoded = urllib.parse.quote(query)
+        url = f"https://itunes.apple.com/search?term={encoded}&entity=song&limit=5"
+        req = urllib.request.Request(
+            url,
+            headers={
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "Accept-Language": "en-US,en;q=0.9"
+            }
+        )
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            data = json.loads(resp.read().decode('utf-8'))
+        results = data.get('results', [])
+        if not results:
+            return None
+
+        # Pick best match: prefer standard studio track over live/remix unless requested
+        best = results[0]
+        for r in results:
+            t = r.get('trackName', '').lower()
+            if ('live' not in t or 'live' in title.lower()) and ('remix' not in t or 'remix' in title.lower()):
+                best = r
+                break
+
+        art_url = best.get('artworkUrl100', '')
+        if art_url:
+            art_url = re.sub(r'\d+x\d+(bb)?', '1200x1200bb', art_url)
+
+        return {
+            "title": best.get('trackName'),
+            "artist": best.get('artistName'),
+            "album": best.get('collectionName'),
+            "year": best.get('releaseDate', '')[:4],
+            "genre": best.get('primaryGenreName'),
+            "track_number": str(best.get('trackNumber', 1)),
+            "artwork_url": art_url
+        }
+    except Exception:
+        pass
+
+    return None
+
+
+def apply_studio_metadata_to_file(file_path: str, meta: dict, ffmpeg_bin: str, embed_art: bool = True) -> str:
+    """Injects pristine studio tags and 1:1 square artwork into the audio file, renaming to clean filename."""
+    if not file_path or not os.path.exists(file_path) or not ffmpeg_bin or not meta:
+        return file_path
+
+    ext = os.path.splitext(file_path)[1].lower().lstrip(".")
+    dir_name = os.path.dirname(file_path)
+    temp_tagged = os.path.join(dir_name, f"temp_tagged_{int(time.time() * 1000)}.{ext}")
+    temp_cover = os.path.join(dir_name, f"temp_cover_{int(time.time() * 1000)}.jpg")
+
+    has_cover = False
+    if embed_art and meta.get("artwork_url"):
+        try:
+            req = urllib.request.Request(meta["artwork_url"], headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req, timeout=8) as resp, open(temp_cover, "wb") as f:
+                shutil.copyfileobj(resp, f)
+            if os.path.exists(temp_cover) and os.path.getsize(temp_cover) > 500:
+                has_cover = True
+        except Exception:
+            has_cover = False
+
+    cmd = [ffmpeg_bin, "-y", "-i", file_path]
+    if has_cover:
+        cmd.extend(["-i", temp_cover, "-map", "0:a", "-map", "1:0", "-c:a", "copy"])
+        if ext == "mp3":
+            cmd.extend([
+                "-id3v2_version", "3",
+                "-metadata:s:v", "title=Album cover",
+                "-metadata:s:v", "comment=Cover (front)"
+            ])
+        else:
+            cmd.extend(["-c:v", "copy"])
+            if ext in ("m4a", "flac"):
+                cmd.extend(["-disposition:v:0", "attached_pic"])
+    else:
+        cmd.extend(["-map", "0:a", "-c:a", "copy"])
+
+    if meta.get("title"):
+        cmd.extend(["-metadata", f"title={meta['title']}"])
+    if meta.get("artist"):
+        cmd.extend(["-metadata", f"artist={meta['artist']}"])
+    if meta.get("album"):
+        cmd.extend(["-metadata", f"album={meta['album']}"])
+    if meta.get("year"):
+        cmd.extend(["-metadata", f"date={meta['year']}"])
+    if meta.get("genre"):
+        cmd.extend(["-metadata", f"genre={meta['genre']}"])
+    if meta.get("track_number"):
+        cmd.extend(["-metadata", f"track={meta['track_number']}"])
+
+    cmd.append(temp_tagged)
+
+    startupinfo = subprocess.STARTUPINFO()
+    startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+    startupinfo.wShowWindow = subprocess.SW_HIDE
+
+    try:
+        res = subprocess.run(
+            cmd,
+            capture_output=True,
+            timeout=15,
+            startupinfo=startupinfo,
+            creationflags=subprocess.CREATE_NO_WINDOW
+        )
+        if res.returncode == 0 and os.path.exists(temp_tagged) and os.path.getsize(temp_tagged) > 1000:
+            clean_art = "".join(c for c in meta.get("artist", "") if c not in '<>:"/\\|?*').strip(' .')
+            clean_tit = "".join(c for c in meta.get("title", "") if c not in '<>:"/\\|?*').strip(' .')
+            new_filename = f"{clean_art} - {clean_tit}.{ext}" if clean_art and clean_tit else os.path.basename(file_path)
+            new_path = os.path.join(dir_name, new_filename)
+
+            try:
+                if new_path == file_path:
+                    os.replace(temp_tagged, new_path)
+                else:
+                    os.replace(temp_tagged, new_path)
+                    if os.path.exists(file_path):
+                        try:
+                            os.remove(file_path)
+                        except Exception:
+                            pass
+                return new_path
+            except Exception:
+                return file_path
+    except Exception:
+        pass
+    finally:
+        if os.path.exists(temp_cover):
+            try: os.remove(temp_cover)
+            except Exception: pass
+        if os.path.exists(temp_tagged):
+            try: os.remove(temp_tagged)
+            except Exception: pass
+
+    return file_path
 
 
 # --- Native Windows Clipboard Access (Thread-Safe & Immune to Tkinter GUI Locking) ---
@@ -134,12 +374,12 @@ class WindowsAudioPlayer:
 
         # For M4A/FLAC/AAC (or MP3 fallback if MCI fails), use Windows PresentationCore MediaPlayer
         try:
-            clean_path = os.path.abspath(file_path).replace("\\", "/").replace("'", "''")
+            clean_path = os.path.abspath(file_path).replace("'", "''")
             ps_cmd = (
                 "Add-Type -AssemblyName WindowsBase; "
                 "Add-Type -AssemblyName PresentationCore; "
                 "$p = New-Object System.Windows.Media.MediaPlayer; "
-                f"$p.Open([System.Uri]'{clean_path}'); "
+                f"$p.Open([System.Uri][System.IO.Path]::GetFullPath('{clean_path}')); "
                 "$p.Play(); "
                 "Start-Sleep -Seconds 600"
             )
@@ -167,6 +407,7 @@ class WindowsAudioPlayer:
         if self.ps_proc:
             try:
                 self.ps_proc.terminate()
+                self.ps_proc.kill()
             except Exception:
                 pass
             self.ps_proc = None
@@ -278,18 +519,18 @@ class ModernToolTip:
 
             container = ctk.CTkFrame(
                 tw,
-                fg_color='#1E272E',
-                border_color='#485460',
+                fg_color=COLOR_CONTROL_BG,
+                border_color="#38383A",
                 border_width=1,
-                corner_radius=6
+                corner_radius=8
             )
             container.pack(fill='both', expand=True)
 
             label = ctk.CTkLabel(
                 container,
                 text=self.text,
-                font=ctk.CTkFont(size=11),
-                text_color='#ECEFF1',
+                font=ctk.CTkFont(family=FONT_FAMILY, size=11),
+                text_color='#F2F2F7',
                 justify='left',
                 wraplength=260
             )
@@ -384,17 +625,17 @@ class MusicDownloaderApp(ctk.CTk):
     def __init__(self):
         super().__init__()
 
-        self.title("OneTapTube - 1-Click Music Downloader")
-        self.geometry("760x810")
-        self.minsize(720, 750)
-        self.configure(fg_color="#0B0F19")
+        self.title("OneTapTube")
+        self.geometry("760x825")
+        self.minsize(720, 780)
+        self.configure(fg_color=COLOR_BG_BASE)
 
         # Load Application Logo Image
         self.app_logo_img = None
         if os.path.exists(APP_ICON_PNG_PATH):
             try:
                 logo_pil = Image.open(APP_ICON_PNG_PATH)
-                self.app_logo_img = ctk.CTkImage(light_image=logo_pil, dark_image=logo_pil, size=(42, 42))
+                self.app_logo_img = ctk.CTkImage(light_image=logo_pil, dark_image=logo_pil, size=(38, 38))
             except Exception:
                 pass
 
@@ -499,7 +740,7 @@ class MusicDownloaderApp(ctk.CTk):
                 tray_image = Image.new('RGB', (64, 64), color=(30, 136, 229))
 
             menu = pystray.Menu(
-                pystray.MenuItem("OneTapTube v1.3.0", lambda: None, enabled=False),
+                pystray.MenuItem("OneTapTube v1.4.0", lambda: None, enabled=False),
                 pystray.Menu.SEPARATOR,
                 pystray.MenuItem("Open OneTapTube", self.restore_from_tray, default=True),
                 pystray.MenuItem("Open Downloads Folder", lambda: self.after(0, self.on_open_folder)),
@@ -529,9 +770,9 @@ class MusicDownloaderApp(ctk.CTk):
                 pass
 
     def create_widgets(self):
-        # 1. Header Frame
+        # 1. Header Frame (Apple Navigation Bar style)
         header = ctk.CTkFrame(self, fg_color="transparent")
-        header.pack(fill="x", padx=20, pady=(16, 8))
+        header.pack(fill="x", padx=22, pady=(16, 10))
 
         title_box = ctk.CTkFrame(header, fg_color="transparent")
         title_box.pack(side="left")
@@ -547,106 +788,150 @@ class MusicDownloaderApp(ctk.CTk):
         title_label = ctk.CTkLabel(
             brand_text_box,
             text="OneTapTube",
-            font=ctk.CTkFont(size=22, weight="bold"),
-            text_color="#F8FAFC"
+            font=ctk.CTkFont(family=FONT_FAMILY, size=21, weight="bold"),
+            text_color=COLOR_TEXT_PRIMARY
         )
         title_label.pack(anchor="w")
 
-        v_text = f"yt-dlp v{self.current_engine_version} • Ready" if self.current_engine_version != "Not Installed" else "Engine: Not Installed"
+        v_text = f"● Ready • yt-dlp v{self.current_engine_version}" if self.current_engine_version != "Not Installed" else "● Engine: Not Installed"
         self.engine_label = ctk.CTkLabel(
             brand_text_box,
             text=v_text,
-            font=ctk.CTkFont(size=11),
-            text_color="#38BDF8" if self.current_engine_version != "Not Installed" else "#F59E0B"
+            font=ctk.CTkFont(family=FONT_FAMILY, size=11),
+            text_color=COLOR_ACCENT_BLUE_TEXT if self.current_engine_version != "Not Installed" else COLOR_ACCENT_AMBER
         )
         self.engine_label.pack(anchor="w")
 
-        # Top Right Actions (GitHub Link, Open Folder & Update Button)
+        # Top Right Actions (Apple Pill Buttons: Downloads, Updates & GitHub)
         actions_box = ctk.CTkFrame(header, fg_color="transparent")
         actions_box.pack(side="right")
-
-        github_btn = ctk.CTkButton(
-            actions_box,
-            text="⭐ GitHub",
-            width=88,
-            height=32,
-            fg_color="#1E293B",
-            border_color="#334155",
-            border_width=1,
-            hover_color="#334155",
-            text_color="#F8FAFC",
-            font=ctk.CTkFont(size=12, weight="bold"),
-            corner_radius=8,
-            command=self.open_github_repo
-        )
-        github_btn.pack(side="left", padx=(0, 10))
-        ModernToolTip(github_btn, "Visit OneTapTube on GitHub (Repository & Releases)")
 
         open_folder_btn = ctk.CTkButton(
             actions_box,
             text="📂 Downloads",
-            width=110,
-            height=32,
-            fg_color="#1E293B",
-            border_color="#334155",
+            width=100,
+            height=30,
+            fg_color=COLOR_CONTROL_BG,
+            border_color=COLOR_CONTROL_BORDER,
             border_width=1,
-            hover_color="#334155",
-            font=ctk.CTkFont(size=12, weight="bold"),
+            hover_color=COLOR_CONTROL_HOVER,
+            text_color=COLOR_TEXT_PRIMARY,
+            font=ctk.CTkFont(family=FONT_FAMILY, size=11, weight="bold"),
             corner_radius=8,
             command=self.on_open_folder
         )
-        open_folder_btn.pack(side="left", padx=(0, 10))
+        open_folder_btn.pack(side="left", padx=(0, 8))
+        ModernToolTip(open_folder_btn, "Open your downloads folder in Windows File Explorer")
 
         self.update_btn = ctk.CTkButton(
             actions_box,
-            text="🔄 Check Updates",
-            width=135,
-            height=32,
-            fg_color="#0284C7",
-            hover_color="#0369A1",
-            font=ctk.CTkFont(size=12, weight="bold"),
+            text="🔄 Updates",
+            width=90,
+            height=30,
+            fg_color=COLOR_CONTROL_BG,
+            border_color=COLOR_CONTROL_BORDER,
+            border_width=1,
+            hover_color=COLOR_CONTROL_HOVER,
+            text_color=COLOR_TEXT_PRIMARY,
+            font=ctk.CTkFont(family=FONT_FAMILY, size=11, weight="bold"),
             corner_radius=8,
             command=self.on_check_update_clicked
         )
-        self.update_btn.pack(side="left")
+        self.update_btn.pack(side="left", padx=(0, 8))
+        ModernToolTip(self.update_btn, "Check for latest yt-dlp audio engine updates")
+
+        github_btn = ctk.CTkButton(
+            actions_box,
+            text="⭐ GitHub",
+            width=85,
+            height=30,
+            fg_color=COLOR_CONTROL_BG,
+            border_color=COLOR_CONTROL_BORDER,
+            border_width=1,
+            hover_color=COLOR_CONTROL_HOVER,
+            text_color=COLOR_TEXT_PRIMARY,
+            font=ctk.CTkFont(family=FONT_FAMILY, size=11, weight="bold"),
+            corner_radius=8,
+            command=self.open_github_repo
+        )
+        github_btn.pack(side="left")
+        ModernToolTip(github_btn, "Visit OneTapTube on GitHub (Repository & Releases)")
 
         # First-Time Setup Banner (Visible ONLY if yt-dlp or FFmpeg is missing on a new PC)
-        self.setup_banner = ctk.CTkFrame(self, fg_color="#7F1D1D", border_color="#991B1B", border_width=1, corner_radius=10)
+        self.setup_banner = ctk.CTkFrame(self, fg_color=COLOR_ACCENT_RED_TINT, border_color=COLOR_ACCENT_RED_BORDER, border_width=1, corner_radius=10)
         self.setup_banner_label = ctk.CTkLabel(
             self.setup_banner,
             text="⚙ First-Time Setup: Required audio engines are missing.",
-            font=ctk.CTkFont(size=12, weight="bold"),
-            text_color="#FFFFFF"
+            font=ctk.CTkFont(family=FONT_FAMILY, size=12, weight="bold"),
+            text_color=COLOR_ACCENT_RED
         )
-        self.setup_banner_label.pack(side="left", padx=15, pady=8)
+        self.setup_banner_label.pack(side="left", padx=16, pady=8)
 
         self.setup_dl_btn = ctk.CTkButton(
             self.setup_banner,
             text="⬇ Auto-Install Components",
-            height=26,
-            fg_color="#FFFFFF",
-            text_color="#C62828",
-            hover_color="#EEEEEE",
-            font=ctk.CTkFont(size=11, weight="bold"),
+            height=28,
+            fg_color=COLOR_ACCENT_RED,
+            text_color="#FFFFFF",
+            hover_color=COLOR_ACCENT_RED_HOVER,
+            font=ctk.CTkFont(family=FONT_FAMILY, size=11, weight="bold"),
+            corner_radius=8,
             command=self.download_missing_components_auto
         )
-        self.setup_dl_btn.pack(side="right", padx=15, pady=8)
+        self.setup_dl_btn.pack(side="right", padx=16, pady=8)
 
-        # 2. Auto-Clipboard Feature Card (Clear Explanation & Instant Feedback)
-        clip_card = ctk.CTkFrame(self, corner_radius=12, fg_color="#111827", border_width=1, border_color="#1F2937")
-        clip_card.pack(fill="x", padx=20, pady=(0, 8))
+        # 2. Spotlight Search & Auto-Download Hub (Apple Spotlight Aesthetic)
+        self.input_card = ctk.CTkFrame(self, corner_radius=14, fg_color=COLOR_CARD_BG, border_width=1, border_color=COLOR_CARD_BORDER)
+        self.input_card.pack(fill="x", padx=22, pady=(0, 10))
 
-        c_top = ctk.CTkFrame(clip_card, fg_color="transparent")
-        c_top.pack(fill="x", padx=16, pady=(12, 4))
+        # Row 1: Spotlight Search & Download Bar
+        search_row = ctk.CTkFrame(self.input_card, fg_color="transparent")
+        search_row.pack(fill="x", padx=16, pady=(14, 8))
+
+        self.url_entry = ctk.CTkEntry(
+            search_row,
+            placeholder_text="Paste YouTube or YouTube Music song / album link...",
+            fg_color=COLOR_SUB_SURFACE,
+            border_color=COLOR_SUB_BORDER,
+            border_width=1,
+            text_color=COLOR_TEXT_PRIMARY,
+            placeholder_text_color=COLOR_TEXT_MUTED,
+            corner_radius=10,
+            height=38,
+            font=ctk.CTkFont(family=FONT_FAMILY, size=12)
+        )
+        self.url_entry.pack(side="left", fill="x", expand=True, padx=(0, 10))
+        self.url_entry.bind("<Return>", lambda e: self.on_manual_download())
+
+        dl_btn = ctk.CTkButton(
+            search_row,
+            text="⬇ Download",
+            width=115,
+            height=38,
+            fg_color=COLOR_ACCENT_BLUE,
+            hover_color=COLOR_ACCENT_BLUE_HOVER,
+            font=ctk.CTkFont(family=FONT_FAMILY, size=12, weight="bold"),
+            corner_radius=10,
+            command=self.on_manual_download
+        )
+        dl_btn.pack(side="left")
+
+        # Row 2: Auto-Clipboard Switch & Indicator
+        clip_row = ctk.CTkFrame(self.input_card, fg_color="transparent")
+        clip_row.pack(fill="x", padx=16, pady=(0, 10))
 
         self.clip_switch = ctk.CTkSwitch(
-            c_top,
+            clip_row,
             text="Auto-Download from Clipboard",
             command=self.on_clip_toggle,
-            font=ctk.CTkFont(size=14, weight="bold"),
-            progress_color="#10B981",
-            button_color="#34D399",
-            button_hover_color="#6EE7B7"
+            font=ctk.CTkFont(family=FONT_FAMILY, size=13, weight="bold"),
+            text_color=COLOR_TEXT_PRIMARY,
+            progress_color=COLOR_ACCENT_BLUE,
+            fg_color="#2C2C2E",
+            button_color="#FFFFFF",
+            button_hover_color="#E5E5EA",
+            height=20,
+            width=42
         )
         if self.config.get("auto_clipboard", True):
             self.clip_switch.select()
@@ -656,48 +941,87 @@ class MusicDownloaderApp(ctk.CTk):
 
         is_active = self.config.get("auto_clipboard", True)
         self.clip_status_badge = ctk.CTkLabel(
-            c_top,
+            clip_row,
             text="● ACTIVE (Auto-Capture)" if is_active else "○ PAUSED",
-            font=ctk.CTkFont(size=11, weight="bold"),
-            fg_color="#064E3B" if is_active else "#1E293B",
-            text_color="#34D399" if is_active else "#64748B",
+            font=ctk.CTkFont(family=FONT_FAMILY, size=11, weight="bold"),
+            fg_color=COLOR_ACCENT_GREEN_TINT if is_active else COLOR_CONTROL_BG,
+            text_color=COLOR_ACCENT_GREEN if is_active else COLOR_TEXT_MUTED,
             corner_radius=8,
             padx=10,
             pady=3
         )
         self.clip_status_badge.pack(side="right")
 
-        # Instruction Text
-        hint_text = ctk.CTkLabel(
-            clip_card,
-            text="💡 Copy any song or album link (Ctrl + C) on YouTube / YouTube Music. OneTapTube captures & saves it instantly!",
-            font=ctk.CTkFont(size=11),
-            text_color="#94A3B8",
-            justify="left"
-        )
-        hint_text.pack(anchor="w", padx=16, pady=(0, 8))
-
-        # Dynamic Notification Banner (Lights up green when a song is copied)
+        # Dynamic Notification Banner (Appears smoothly when a song is copied)
         self.toast_banner = ctk.CTkLabel(
-            clip_card,
+            self.input_card,
             text="",
-            font=ctk.CTkFont(size=12, weight="bold"),
-            text_color="#FFFFFF",
+            font=ctk.CTkFont(family=FONT_FAMILY, size=12, weight="bold"),
+            text_color=COLOR_TEXT_PRIMARY,
             corner_radius=8,
             fg_color="transparent",
-            height=0
+            height=28
         )
-        self.toast_banner.pack(fill="x", padx=16, pady=(0, 8))
 
-        # 3. Settings Card
-        settings_frame = ctk.CTkFrame(self, corner_radius=12, fg_color="#111827", border_width=1, border_color="#1F2937")
-        settings_frame.pack(fill="x", padx=20, pady=(0, 8))
+        # 3. Live Download Progress & Status Card (Apple Island Style)
+        status_card = ctk.CTkFrame(self, corner_radius=14, fg_color=COLOR_CARD_BG, border_width=1, border_color=COLOR_CARD_BORDER)
+        status_card.pack(fill="x", padx=22, pady=(0, 10))
+
+        s_head = ctk.CTkFrame(status_card, fg_color="transparent")
+        s_head.pack(fill="x", padx=16, pady=(12, 4))
+
+        self.song_title_label = ctk.CTkLabel(
+            s_head,
+            text="Ready — Waiting for song...",
+            font=ctk.CTkFont(family=FONT_FAMILY, size=13, weight="bold"),
+            text_color=COLOR_TEXT_PRIMARY
+        )
+        self.song_title_label.pack(side="left")
+
+        self.queue_badge = ctk.CTkLabel(
+            s_head,
+            text="Queue: 0 songs",
+            font=ctk.CTkFont(family=FONT_FAMILY, size=11, weight="bold"),
+            fg_color=COLOR_ACCENT_BLUE_TINT,
+            text_color=COLOR_ACCENT_BLUE_TEXT,
+            corner_radius=8,
+            padx=10,
+            pady=3
+        )
+        self.queue_badge.pack(side="right")
+
+        self.status_detail_label = ctk.CTkLabel(
+            status_card,
+            text="Status: Idle",
+            font=ctk.CTkFont(family=FONT_FAMILY, size=12),
+            text_color=COLOR_TEXT_SECONDARY
+        )
+        self.status_detail_label.pack(anchor="w", padx=16, pady=(0, 8))
+
+        self.progress_bar = ctk.CTkProgressBar(
+            status_card,
+            height=6,
+            corner_radius=3,
+            progress_color=COLOR_ACCENT_BLUE,
+            fg_color="#1C1C1E"
+        )
+        self.progress_bar.set(0.0)
+        self.progress_bar.pack(fill="x", padx=16, pady=(0, 14))
+
+        # 4. Settings Card (Apple Preferences Grouped Style)
+        settings_frame = ctk.CTkFrame(self, corner_radius=14, fg_color=COLOR_CARD_BG, border_width=1, border_color=COLOR_CARD_BORDER)
+        settings_frame.pack(fill="x", padx=22, pady=(0, 10))
 
         # Row 1: Format Selector & Bitrate (Default: MP3)
         r1 = ctk.CTkFrame(settings_frame, fg_color="transparent")
         r1.pack(fill="x", padx=16, pady=(12, 6))
 
-        fmt_label = ctk.CTkLabel(r1, text="Format:", font=ctk.CTkFont(weight="bold"), text_color="#E2E8F0")
+        fmt_label = ctk.CTkLabel(
+            r1,
+            text="Format:",
+            font=ctk.CTkFont(family=FONT_FAMILY, size=12, weight="bold"),
+            text_color=COLOR_TEXT_PRIMARY
+        )
         fmt_label.pack(side="left", padx=(0, 8))
 
         current_fmt = self.config.get("audio_format", "mp3")
@@ -711,17 +1035,27 @@ class MusicDownloaderApp(ctk.CTk):
             r1,
             values=["MP3 (Universal)", "⚡ M4A (Lightning Fast)", "FLAC (Lossless)"],
             command=self.on_format_change,
-            width=165,
+            width=175,
             height=28,
-            fg_color="#1E293B",
-            button_color="#334155",
-            button_hover_color="#475569",
-            corner_radius=8
+            fg_color=COLOR_CONTROL_BG,
+            button_color=COLOR_CONTROL_HOVER,
+            button_hover_color=COLOR_CONTROL_ACTIVE,
+            text_color=COLOR_TEXT_PRIMARY,
+            corner_radius=8,
+            dropdown_fg_color=COLOR_CONTROL_BG,
+            dropdown_hover_color=COLOR_CONTROL_HOVER,
+            dropdown_text_color=COLOR_TEXT_PRIMARY,
+            font=ctk.CTkFont(family=FONT_FAMILY, size=12)
         )
         self.format_menu.set(fmt_display_map.get(current_fmt, "MP3 (Universal)"))
         self.format_menu.pack(side="left", padx=(0, 18))
 
-        self.q_label = ctk.CTkLabel(r1, text="Bitrate:", font=ctk.CTkFont(weight="bold"), text_color="#E2E8F0")
+        self.q_label = ctk.CTkLabel(
+            r1,
+            text="Bitrate:",
+            font=ctk.CTkFont(family=FONT_FAMILY, size=12, weight="bold"),
+            text_color=COLOR_TEXT_PRIMARY
+        )
         self.q_label.pack(side="left", padx=(0, 8))
 
         qualities = ["64", "128", "160", "192", "256", "320"]
@@ -733,22 +1067,27 @@ class MusicDownloaderApp(ctk.CTk):
             r1,
             values=[f"{q} kbps" for q in qualities],
             command=self.on_quality_change,
-            width=100,
+            width=105,
             height=28,
-            fg_color="#1E293B",
-            button_color="#334155",
-            button_hover_color="#475569",
-            corner_radius=8
+            fg_color=COLOR_CONTROL_BG,
+            button_color=COLOR_CONTROL_HOVER,
+            button_hover_color=COLOR_CONTROL_ACTIVE,
+            text_color=COLOR_TEXT_PRIMARY,
+            corner_radius=8,
+            dropdown_fg_color=COLOR_CONTROL_BG,
+            dropdown_hover_color=COLOR_CONTROL_HOVER,
+            dropdown_text_color=COLOR_TEXT_PRIMARY,
+            font=ctk.CTkFont(family=FONT_FAMILY, size=12)
         )
         self.quality_menu.set(f"{current_q} kbps")
         self.quality_menu.pack(side="left", padx=(0, 15))
 
         if current_fmt in ["m4a", "flac"]:
             self.quality_menu.configure(state="disabled")
-            self.q_label.configure(text_color="#64748B")
+            self.q_label.configure(text_color=COLOR_TEXT_MUTED)
         else:
             self.quality_menu.configure(state="normal")
-            self.q_label.configure(text_color="#E2E8F0")
+            self.q_label.configure(text_color=COLOR_TEXT_PRIMARY)
 
         # Row 2: Tag, Artwork & Auto-Skip Checkboxes
         r2 = ctk.CTkFrame(settings_frame, fg_color="transparent")
@@ -756,13 +1095,15 @@ class MusicDownloaderApp(ctk.CTk):
 
         self.meta_checkbox = ctk.CTkCheckBox(
             r2,
-            text="Embed Tags",
+            text="Embed Studio Tags",
             command=self.on_meta_toggle,
-            fg_color="#2563EB",
-            hover_color="#1D4ED8",
-            border_color="#475569",
-            corner_radius=6,
-            text_color="#E2E8F0"
+            fg_color=COLOR_ACCENT_BLUE,
+            hover_color=COLOR_ACCENT_BLUE_HOVER,
+            border_color="#3A3A3C",
+            checkmark_color="#FFFFFF",
+            corner_radius=5,
+            text_color="#E5E5EA",
+            font=ctk.CTkFont(family=FONT_FAMILY, size=12)
         )
         if self.config.get("embed_metadata", True):
             self.meta_checkbox.select()
@@ -772,13 +1113,15 @@ class MusicDownloaderApp(ctk.CTk):
 
         self.art_checkbox = ctk.CTkCheckBox(
             r2,
-            text="Embed Cover Art",
+            text="Embed 1:1 Cover Art",
             command=self.on_art_toggle,
-            fg_color="#2563EB",
-            hover_color="#1D4ED8",
-            border_color="#475569",
-            corner_radius=6,
-            text_color="#E2E8F0"
+            fg_color=COLOR_ACCENT_BLUE,
+            hover_color=COLOR_ACCENT_BLUE_HOVER,
+            border_color="#3A3A3C",
+            checkmark_color="#FFFFFF",
+            corner_radius=5,
+            text_color="#E5E5EA",
+            font=ctk.CTkFont(family=FONT_FAMILY, size=12)
         )
         if self.config.get("embed_thumbnail", False):
             self.art_checkbox.select()
@@ -790,11 +1133,13 @@ class MusicDownloaderApp(ctk.CTk):
             r2,
             text="Auto-Skip Existing Songs",
             command=self.on_skip_toggle,
-            fg_color="#2563EB",
-            hover_color="#1D4ED8",
-            border_color="#475569",
-            corner_radius=6,
-            text_color="#E2E8F0"
+            fg_color=COLOR_ACCENT_BLUE,
+            hover_color=COLOR_ACCENT_BLUE_HOVER,
+            border_color="#3A3A3C",
+            checkmark_color="#FFFFFF",
+            corner_radius=5,
+            text_color="#E5E5EA",
+            font=ctk.CTkFont(family=FONT_FAMILY, size=12)
         )
         if self.config.get("skip_existing", True):
             self.skip_checkbox.select()
@@ -806,16 +1151,23 @@ class MusicDownloaderApp(ctk.CTk):
         r3 = ctk.CTkFrame(settings_frame, fg_color="transparent")
         r3.pack(fill="x", padx=16, pady=(4, 12))
 
-        f_label = ctk.CTkLabel(r3, text="Save Folder:", font=ctk.CTkFont(weight="bold"), text_color="#E2E8F0")
+        f_label = ctk.CTkLabel(
+            r3,
+            text="Save Folder:",
+            font=ctk.CTkFont(family=FONT_FAMILY, size=12, weight="bold"),
+            text_color=COLOR_TEXT_PRIMARY
+        )
         f_label.pack(side="left", padx=(0, 8))
 
         self.folder_entry = ctk.CTkEntry(
             r3,
-            fg_color="#0B0F19",
-            border_color="#1E293B",
+            fg_color=COLOR_SUB_SURFACE,
+            border_color=COLOR_SUB_BORDER,
             border_width=1,
             corner_radius=8,
-            height=28
+            height=28,
+            text_color=COLOR_TEXT_PRIMARY,
+            font=ctk.CTkFont(family=FONT_FAMILY, size=11)
         )
         self.folder_entry.insert(0, self.config.get("download_dir", DEFAULT_DOWNLOAD_DIR))
         self.folder_entry.configure(state="readonly")
@@ -824,13 +1176,15 @@ class MusicDownloaderApp(ctk.CTk):
         browse_btn = ctk.CTkButton(
             r3,
             text="Browse...",
-            width=85,
+            width=80,
             height=28,
-            fg_color="#1E293B",
-            border_color="#334155",
+            fg_color=COLOR_CONTROL_BG,
+            border_color=COLOR_CONTROL_BORDER,
             border_width=1,
-            hover_color="#334155",
+            hover_color=COLOR_CONTROL_HOVER,
+            text_color=COLOR_TEXT_PRIMARY,
             corner_radius=8,
+            font=ctk.CTkFont(family=FONT_FAMILY, size=11, weight="bold"),
             command=self.on_browse_folder
         )
         browse_btn.pack(side="left")
@@ -866,97 +1220,21 @@ class MusicDownloaderApp(ctk.CTk):
         )
         ModernToolTip(
             self.clip_switch,
-            "Automatic Clipboard Monitor:\nWhen active, copying (Ctrl + C) any song or playlist link in YouTube Music instantly queues the download in the background."
+            "Automatic Clipboard Monitor:\nWhen active, copying (Ctrl + C) any song or playlist link in YouTube or YouTube Music instantly queues the download in the background."
         )
 
-        # 4. Manual URL Input Row
-        manual_frame = ctk.CTkFrame(self, fg_color="transparent")
-        manual_frame.pack(fill="x", padx=20, pady=(0, 8))
-
-        self.url_entry = ctk.CTkEntry(
-            manual_frame,
-            placeholder_text="🔗 Paste a YouTube or YouTube Music song / album link here...",
-            fg_color="#111827",
-            border_color="#1F2937",
-            border_width=1,
-            text_color="#F8FAFC",
-            placeholder_text_color="#64748B",
-            corner_radius=10,
-            height=38
-        )
-        self.url_entry.pack(side="left", fill="x", expand=True, padx=(0, 10))
-        self.url_entry.bind("<Return>", lambda e: self.on_manual_download())
-
-        dl_btn = ctk.CTkButton(
-            manual_frame,
-            text="⬇ Download",
-            width=120,
-            height=38,
-            fg_color="#E11D48",
-            hover_color="#BE123C",
-            font=ctk.CTkFont(size=13, weight="bold"),
-            corner_radius=10,
-            command=self.on_manual_download
-        )
-        dl_btn.pack(side="left")
-
-        # 5. Live Download Progress & Status Card
-        status_card = ctk.CTkFrame(self, corner_radius=12, fg_color="#111827", border_width=1, border_color="#1F2937")
-        status_card.pack(fill="x", padx=20, pady=(0, 8))
-
-        s_head = ctk.CTkFrame(status_card, fg_color="transparent")
-        s_head.pack(fill="x", padx=16, pady=(12, 4))
-
-        self.song_title_label = ctk.CTkLabel(
-            s_head,
-            text="Ready — Waiting for song...",
-            font=ctk.CTkFont(size=14, weight="bold"),
-            text_color="#F8FAFC"
-        )
-        self.song_title_label.pack(side="left")
-
-        self.queue_badge = ctk.CTkLabel(
-            s_head,
-            text="Queue: 0 songs",
-            font=ctk.CTkFont(size=11, weight="bold"),
-            fg_color="#1E293B",
-            text_color="#38BDF8",
-            corner_radius=8,
-            padx=10,
-            pady=3
-        )
-        self.queue_badge.pack(side="right")
-
-        self.status_detail_label = ctk.CTkLabel(
-            status_card,
-            text="Status: Idle",
-            font=ctk.CTkFont(size=12),
-            text_color="#94A3B8"
-        )
-        self.status_detail_label.pack(anchor="w", padx=16, pady=(0, 6))
-
-        self.progress_bar = ctk.CTkProgressBar(
-            status_card,
-            height=10,
-            corner_radius=5,
-            progress_color="#2563EB",
-            fg_color="#1E293B"
-        )
-        self.progress_bar.set(0.0)
-        self.progress_bar.pack(fill="x", padx=16, pady=(0, 14))
-
-        # 6. Recent Completed Downloads History with In-App Preview Mini Player
-        history_frame = ctk.CTkFrame(self, corner_radius=12, fg_color="#111827", border_width=1, border_color="#1F2937")
-        history_frame.pack(fill="both", expand=True, padx=20, pady=(0, 16))
+        # 5. Recent Completed Downloads History (Apple Music Library List)
+        history_frame = ctk.CTkFrame(self, corner_radius=14, fg_color=COLOR_CARD_BG, border_width=1, border_color=COLOR_CARD_BORDER)
+        history_frame.pack(fill="both", expand=True, padx=22, pady=(0, 16))
 
         h_head = ctk.CTkFrame(history_frame, fg_color="transparent")
         h_head.pack(fill="x", padx=16, pady=(10, 4))
 
         ctk.CTkLabel(
             h_head,
-            text="Recent Downloads & In-App Preview:",
-            font=ctk.CTkFont(size=12, weight="bold"),
-            text_color="#F8FAFC"
+            text="Recent Downloads & Preview",
+            font=ctk.CTkFont(family=FONT_FAMILY, size=13, weight="bold"),
+            text_color=COLOR_TEXT_PRIMARY
         ).pack(side="left")
 
         clear_hist_btn = ctk.CTkButton(
@@ -965,9 +1243,10 @@ class MusicDownloaderApp(ctk.CTk):
             width=50,
             height=22,
             fg_color="transparent",
-            text_color="#64748B",
-            hover_color="#1E293B",
+            text_color=COLOR_TEXT_MUTED,
+            hover_color=COLOR_CONTROL_BG,
             corner_radius=6,
+            font=ctk.CTkFont(family=FONT_FAMILY, size=11),
             command=self.on_clear_history
         )
         clear_hist_btn.pack(side="right")
@@ -977,9 +1256,9 @@ class MusicDownloaderApp(ctk.CTk):
 
         self.empty_history_label = ctk.CTkLabel(
             self.history_box,
-            text="🎵 No songs downloaded yet.\nCopy any song link (Ctrl + C) on YouTube Music to get started!",
-            font=ctk.CTkFont(size=12),
-            text_color="#64748B",
+            text="🎵 No songs downloaded yet.\nCopy any song link (Ctrl + C) on YouTube or YouTube Music to get started!",
+            font=ctk.CTkFont(family=FONT_FAMILY, size=12),
+            text_color=COLOR_TEXT_MUTED,
             justify="center"
         )
         self.empty_history_label.pack(pady=40)
@@ -998,14 +1277,15 @@ class MusicDownloaderApp(ctk.CTk):
         if missing:
             msg = f"⚙ First-Time Setup: Missing {', '.join(missing)} on this PC."
             self.setup_banner_label.configure(text=msg)
-            self.setup_banner.pack(fill="x", padx=20, pady=(0, 6), before=self.clip_switch.master.master)
+            if not self.setup_banner.winfo_ismapped():
+                self.setup_banner.pack(fill="x", padx=22, pady=(0, 8), before=self.input_card)
             return False
         else:
             self.setup_banner.pack_forget()
             self.current_engine_version = get_ytdlp_version() or "Available"
             self.engine_label.configure(
-                text=f"yt-dlp v{self.current_engine_version} • Ready",
-                text_color="#38BDF8"
+                text=f"● Ready • yt-dlp v{self.current_engine_version}",
+                text_color=COLOR_ACCENT_BLUE_TEXT
             )
             return True
 
@@ -1077,8 +1357,8 @@ class MusicDownloaderApp(ctk.CTk):
         self.setup_banner.pack_forget()
         self.current_engine_version = get_ytdlp_version() or "Ready"
         self.engine_label.configure(
-            text=f"yt-dlp v{self.current_engine_version} • Ready",
-            text_color="#38BDF8"
+            text=f"● Ready • yt-dlp v{self.current_engine_version}",
+            text_color=COLOR_ACCENT_BLUE_TEXT
         )
         self.show_clipboard_toast("All components installed! OneTapTube is ready.")
 
@@ -1086,10 +1366,12 @@ class MusicDownloaderApp(ctk.CTk):
     def show_clipboard_toast(self, text: str, is_success: bool = True, on_click=None):
         self.toast_banner.configure(
             text=f"  ✓ {text}  " if is_success else f"  ✕ {text}  ",
-            fg_color="#064E3B" if is_success else "#7F1D1D",
-            text_color="#34D399" if is_success else "#FCA5A5",
+            fg_color=COLOR_ACCENT_GREEN_TINT if is_success else COLOR_ACCENT_RED_TINT,
+            text_color=COLOR_ACCENT_GREEN if is_success else COLOR_ACCENT_RED,
             height=28
         )
+        if not self.toast_banner.winfo_ismapped():
+            self.toast_banner.pack(fill="x", padx=16, pady=(0, 10))
         try:
             self.toast_banner.unbind("<Button-1>")
         except Exception:
@@ -1112,7 +1394,9 @@ class MusicDownloaderApp(ctk.CTk):
             self.toast_banner.unbind("<Button-1>")
         except Exception:
             pass
-        self.toast_banner.configure(text="", fg_color="transparent", height=0)
+        self.toast_banner.configure(text="", fg_color="transparent")
+        if self.toast_banner.winfo_ismapped():
+            self.toast_banner.pack_forget()
         try:
             self.toast_banner.configure(cursor="")
         except Exception:
@@ -1124,15 +1408,15 @@ class MusicDownloaderApp(ctk.CTk):
             self.empty_history_label.destroy()
             self.empty_history_label = None
 
-        row = ctk.CTkFrame(self.history_box, fg_color="#1E293B", border_color="#334155", border_width=1, corner_radius=8)
+        row = ctk.CTkFrame(self.history_box, fg_color="#161619", border_color=COLOR_CARD_BORDER, border_width=1, corner_radius=9)
         row.pack(fill="x", pady=3, padx=4)
 
-        status_icon = "⏩" if is_skipped else "✓"
-        icon_color = "#F59E0B" if is_skipped else "#10B981"
+        status_icon = "✓" if not is_skipped else "⏩"
+        icon_color = COLOR_ACCENT_GREEN if not is_skipped else COLOR_ACCENT_AMBER
         icon_label = ctk.CTkLabel(
             row,
             text=status_icon,
-            font=ctk.CTkFont(size=13, weight="bold"),
+            font=ctk.CTkFont(family=FONT_FAMILY, size=13, weight="bold"),
             text_color=icon_color,
             width=26
         )
@@ -1141,8 +1425,8 @@ class MusicDownloaderApp(ctk.CTk):
         song_info = ctk.CTkLabel(
             row,
             text=f"{artist} - {title}",
-            font=ctk.CTkFont(size=12, weight="bold"),
-            text_color="#F8FAFC",
+            font=ctk.CTkFont(family=FONT_FAMILY, size=12, weight="bold"),
+            text_color=COLOR_TEXT_PRIMARY,
             anchor="w"
         )
         song_info.pack(side="left", fill="x", expand=True, padx=4)
@@ -1151,9 +1435,9 @@ class MusicDownloaderApp(ctk.CTk):
         tag = ctk.CTkLabel(
             row,
             text=status_display,
-            font=ctk.CTkFont(size=10, weight="bold"),
-            fg_color="#0F172A",
-            text_color="#94A3B8",
+            font=ctk.CTkFont(family=FONT_FAMILY, size=10, weight="bold"),
+            fg_color=COLOR_ACCENT_BLUE_TINT,
+            text_color=COLOR_ACCENT_BLUE_TEXT,
             corner_radius=6,
             padx=8,
             pady=2
@@ -1166,12 +1450,14 @@ class MusicDownloaderApp(ctk.CTk):
             open_btn = ctk.CTkButton(
                 row,
                 text="📂",
-                width=30,
-                height=24,
-                font=ctk.CTkFont(size=12),
-                fg_color="#334155",
-                hover_color="#475569",
-                corner_radius=6,
+                width=32,
+                height=26,
+                font=ctk.CTkFont(family=FONT_FAMILY, size=12),
+                fg_color=COLOR_CONTROL_BG,
+                border_color=COLOR_CONTROL_BORDER,
+                border_width=1,
+                hover_color=COLOR_CONTROL_HOVER,
+                corner_radius=7,
                 command=lambda fp=file_path: self.reveal_file(fp)
             )
             ModernToolTip(open_btn, "Open and highlight file in Windows File Explorer")
@@ -1181,31 +1467,34 @@ class MusicDownloaderApp(ctk.CTk):
             play_btn = ctk.CTkButton(
                 row,
                 text="▶ Preview",
-                width=75,
-                height=24,
-                font=ctk.CTkFont(size=11, weight="bold"),
-                fg_color="#059669",
-                hover_color="#047857",
-                corner_radius=6
+                width=80,
+                height=26,
+                font=ctk.CTkFont(family=FONT_FAMILY, size=11, weight="bold"),
+                fg_color=COLOR_ACCENT_GREEN_TINT,
+                text_color=COLOR_ACCENT_GREEN,
+                border_color="#1B4D2E",
+                border_width=1,
+                hover_color="#163D27",
+                corner_radius=7
             )
 
             def toggle_play(fp=file_path, b=play_btn):
                 if self.audio_player.is_playing and self.audio_player.current_path == fp:
                     self.audio_player.stop()
-                    b.configure(text="▶ Preview", fg_color="#059669", hover_color="#047857")
+                    b.configure(text="▶ Preview", fg_color=COLOR_ACCENT_GREEN_TINT, text_color=COLOR_ACCENT_GREEN, border_color="#1B4D2E", hover_color="#163D27")
                     self.active_play_btn = None
                 else:
                     if self.active_play_btn:
                         try:
-                            self.active_play_btn.configure(text="▶ Preview", fg_color="#059669", hover_color="#047857")
+                            self.active_play_btn.configure(text="▶ Preview", fg_color=COLOR_ACCENT_GREEN_TINT, text_color=COLOR_ACCENT_GREEN, border_color="#1B4D2E", hover_color="#163D27")
                         except Exception:
                             pass
                     success = self.audio_player.play(fp)
                     if success:
-                        b.configure(text="⏹ Stop", fg_color="#E11D48", hover_color="#BE123C")
+                        b.configure(text="⏹ Stop", fg_color=COLOR_ACCENT_RED_TINT, text_color=COLOR_ACCENT_RED, border_color=COLOR_ACCENT_RED_BORDER, hover_color="#3D171A")
                         self.active_play_btn = b
                     else:
-                        b.configure(text="✕ Error", fg_color="#475569")
+                        b.configure(text="✕ Error", fg_color=COLOR_CONTROL_BG, text_color=COLOR_TEXT_MUTED, border_color=COLOR_CONTROL_BORDER)
 
             play_btn.configure(command=toggle_play)
             play_btn.pack(side="right", padx=(4, 2))
@@ -1230,9 +1519,9 @@ class MusicDownloaderApp(ctk.CTk):
             widget.destroy()
         self.empty_history_label = ctk.CTkLabel(
             self.history_box,
-            text="🎵 No songs downloaded yet.\nCopy any song link (Ctrl + C) on YouTube Music to get started!",
-            font=ctk.CTkFont(size=12),
-            text_color="#64748B",
+            text="🎵 No songs downloaded yet.\nCopy any song link (Ctrl + C) on YouTube or YouTube Music to get started!",
+            font=ctk.CTkFont(family=FONT_FAMILY, size=12),
+            text_color=COLOR_TEXT_MUTED,
             justify="center"
         )
         self.empty_history_label.pack(pady=40)
@@ -1247,17 +1536,17 @@ class MusicDownloaderApp(ctk.CTk):
         if "M4A" in val:
             self.config["audio_format"] = "m4a"
             self.quality_menu.configure(state="disabled")
-            self.q_label.configure(text_color="#64748B")
+            self.q_label.configure(text_color=COLOR_TEXT_MUTED)
             self.show_clipboard_toast("Switched to Lightning M4A (Untouched 1-second AAC stream)")
         elif "FLAC" in val:
             self.config["audio_format"] = "flac"
             self.quality_menu.configure(state="disabled")
-            self.q_label.configure(text_color="#64748B")
+            self.q_label.configure(text_color=COLOR_TEXT_MUTED)
             self.show_clipboard_toast("Switched to FLAC (Lossless audio container)")
         else:
             self.config["audio_format"] = "mp3"
             self.quality_menu.configure(state="normal")
-            self.q_label.configure(text_color="#E2E8F0")
+            self.q_label.configure(text_color=COLOR_TEXT_PRIMARY)
             self.show_clipboard_toast("Switched to MP3 (Custom bitrate)")
         self.save_config()
 
@@ -1288,14 +1577,14 @@ class MusicDownloaderApp(ctk.CTk):
         if enabled:
             self.clip_status_badge.configure(
                 text="● ACTIVE (Auto-Capture)",
-                fg_color="#064E3B",
-                text_color="#34D399"
+                fg_color=COLOR_ACCENT_GREEN_TINT,
+                text_color=COLOR_ACCENT_GREEN
             )
         else:
             self.clip_status_badge.configure(
                 text="○ PAUSED",
-                fg_color="#1E293B",
-                text_color="#64748B"
+                fg_color=COLOR_CONTROL_BG,
+                text_color=COLOR_TEXT_MUTED
             )
 
     def on_browse_folder(self):
@@ -1325,7 +1614,7 @@ class MusicDownloaderApp(ctk.CTk):
 
     # --- Clipboard & URL Processing with Playlist Detection ---
     def on_manual_download(self):
-        raw = self.url_entry.get().strip()
+        raw = self.url_entry.get().strip().strip('<>"\'')
         if not raw:
             return
         self.handle_incoming_url(raw, source="Manual")
@@ -1358,21 +1647,23 @@ class MusicDownloaderApp(ctk.CTk):
         """Displays interactive modal to download full album / playlist."""
         modal = ctk.CTkToplevel(self)
         modal.title("Playlist / Album Detected")
-        modal.geometry("460x220")
+        modal.geometry("480x230")
         modal.resizable(False, False)
         modal.attributes('-topmost', True)
+        modal.configure(fg_color=COLOR_CARD_BG)
 
         ctk.CTkLabel(
             modal,
             text="🎵 Playlist / Album Detected!",
-            font=ctk.CTkFont(size=16, weight="bold")
+            font=ctk.CTkFont(family=FONT_FAMILY, size=16, weight="bold"),
+            text_color=COLOR_TEXT_PRIMARY
         ).pack(pady=(20, 6))
 
         info_label = ctk.CTkLabel(
             modal,
             text="Fetching playlist tracklist details...",
-            font=ctk.CTkFont(size=12),
-            text_color="#B0BEC5"
+            font=ctk.CTkFont(family=FONT_FAMILY, size=12),
+            text_color=COLOR_TEXT_SECONDARY
         )
         info_label.pack(pady=4)
 
@@ -1445,11 +1736,12 @@ class MusicDownloaderApp(ctk.CTk):
                 ctk.CTkButton(
                     btn_box,
                     text=f"⬇ Download All ({len(tracks)})",
-                    fg_color="#2E7D32",
-                    hover_color="#1B5E20",
-                    font=ctk.CTkFont(weight="bold"),
+                    fg_color=COLOR_ACCENT_BLUE,
+                    hover_color=COLOR_ACCENT_BLUE_HOVER,
+                    font=ctk.CTkFont(family=FONT_FAMILY, size=12, weight="bold"),
+                    corner_radius=8,
                     command=download_all
-                ).pack(side="left", padx=8)
+                ).pack(side="left", padx=6)
 
                 if single_vid:
                     def download_single():
@@ -1458,20 +1750,29 @@ class MusicDownloaderApp(ctk.CTk):
 
                     ctk.CTkButton(
                         btn_box,
-                        text="Download Single Song",
-                        fg_color="#1E88E5",
-                        hover_color="#1565C0",
-                        font=ctk.CTkFont(weight="bold"),
+                        text="Single Song Only",
+                        fg_color=COLOR_CONTROL_BG,
+                        border_color=COLOR_CONTROL_BORDER,
+                        border_width=1,
+                        hover_color=COLOR_CONTROL_HOVER,
+                        text_color=COLOR_TEXT_PRIMARY,
+                        font=ctk.CTkFont(family=FONT_FAMILY, size=12, weight="bold"),
+                        corner_radius=8,
                         command=download_single
-                    ).pack(side="left", padx=8)
+                    ).pack(side="left", padx=6)
 
                 ctk.CTkButton(
                     btn_box,
                     text="Cancel",
-                    fg_color="#455A64",
-                    hover_color="#37474F",
+                    fg_color=COLOR_CONTROL_BG,
+                    border_color=COLOR_CONTROL_BORDER,
+                    border_width=1,
+                    hover_color=COLOR_CONTROL_HOVER,
+                    text_color=COLOR_TEXT_SECONDARY,
+                    font=ctk.CTkFont(family=FONT_FAMILY, size=12),
+                    corner_radius=8,
                     command=modal.destroy
-                ).pack(side="left", padx=8)
+                ).pack(side="left", padx=6)
 
             self.after(0, update_ui)
 
@@ -1483,20 +1784,22 @@ class MusicDownloaderApp(ctk.CTk):
                 self.currently_queued.add(video_id)
                 self.download_queue.put((video_id, title_hint))
                 self.after(0, self.update_queue_badge)
-                if source == "Clipboard":
-                    if album_id and not album_id.startswith("RD"):
-                        self.after(0, lambda a_id=album_id: self.show_clipboard_toast(
-                            "Song queued! • Album detected (click here to download full album)",
-                            on_click=lambda: self.prompt_playlist_download(a_id)
-                        ))
-                    else:
-                        self.after(0, lambda: self.show_clipboard_toast(f"Song queued: https://music.youtube.com/watch?v={video_id}"))
+                if album_id and not album_id.startswith("RD"):
+                    self.after(0, lambda a_id=album_id: self.show_clipboard_toast(
+                        "Song queued! • Album detected (click here to download full album)",
+                        on_click=lambda: self.prompt_playlist_download(a_id)
+                    ))
+                else:
+                    msg = "Song queued automatically from clipboard" if source == "Clipboard" else "Song queued for download"
+                    self.after(0, lambda m=msg: self.show_clipboard_toast(m))
+            elif source == "Manual":
+                self.after(0, lambda: self.show_clipboard_toast("Song is already in the download queue", is_success=False))
 
     # Clipboard Monitoring: Thread-Safe Native Windows Hook (Zero GUI Thread Contention)
     def clipboard_monitor(self):
         last_clipboard_text = ""
         try:
-            last_clipboard_text = get_native_clipboard_text() or self.clipboard_get().strip()
+            last_clipboard_text = get_native_clipboard_text()
         except Exception:
             pass
 
@@ -1504,12 +1807,6 @@ class MusicDownloaderApp(ctk.CTk):
             if self.config.get("auto_clipboard", True):
                 try:
                     clip = get_native_clipboard_text()
-                    if not clip:
-                        try:
-                            clip = self.clipboard_get().strip()
-                        except Exception:
-                            clip = ""
-
                     if clip and clip != last_clipboard_text:
                         last_clipboard_text = clip
                         self.after(0, lambda c=clip: self.handle_incoming_url(c, source="Clipboard"))
@@ -1623,6 +1920,11 @@ class MusicDownloaderApp(ctk.CTk):
 
         artist_name = "Unknown Artist"
         song_title = title_hint or "Unknown Title"
+        if title_hint and " - " in title_hint:
+            hint_parts = title_hint.split(" - ", 1)
+            artist_name = hint_parts[0].strip() or artist_name
+            song_title = hint_parts[1].strip() or song_title
+
         last_error_line = ""
         is_already_downloaded = False
         saved_file_path = None
@@ -1654,8 +1956,12 @@ class MusicDownloaderApp(ctk.CTk):
                     raw_meta = line.replace("METADATA:", "").strip()
                     parts = raw_meta.split("|||")
                     if len(parts) >= 2:
-                        artist_name = parts[0].strip() or "Unknown Artist"
-                        song_title = parts[1].strip() or "Unknown Title"
+                        meta_artist = parts[0].strip()
+                        meta_title = parts[1].strip()
+                        if artist_name == "Unknown Artist" and meta_artist:
+                            artist_name = meta_artist
+                        if (not title_hint or " - " not in title_hint) and meta_title:
+                            song_title = meta_title
                         if self.active_display_worker == worker_id:
                             self.after(0, lambda a=artist_name, t=song_title: self.song_title_label.configure(text=f"🎵 {a} - {t}"))
 
@@ -1697,7 +2003,7 @@ class MusicDownloaderApp(ctk.CTk):
 
             # Find output file if not captured directly via SAVED_PATH
             ext = target_format
-            if not saved_file_path:
+            if not saved_file_path or not os.path.exists(saved_file_path):
                 expected_filename = f"{artist_name} - {song_title}.{ext}"
                 candidate_path = os.path.join(target_dir, expected_filename)
                 if os.path.exists(candidate_path):
@@ -1711,7 +2017,7 @@ class MusicDownloaderApp(ctk.CTk):
                                 if clean_t and clean_t in clean_f:
                                     saved_file_path = os.path.join(target_dir, f)
                                     break
-                        if not saved_file_path:
+                        if not saved_file_path or not os.path.exists(saved_file_path):
                             recent_files = [
                                 os.path.join(target_dir, f)
                                 for f in os.listdir(target_dir)
@@ -1740,6 +2046,18 @@ class MusicDownloaderApp(ctk.CTk):
                         self.after(0, lambda: self.progress_bar.set(1.0))
                     self.after(0, lambda a=artist_name, t=song_title, fp=saved_file_path: self.add_history_entry(a, t, tag_label, fp, is_skipped=True))
                 else:
+                    # Enrich with studio-grade metadata & 1:1 square artwork if enabled
+                    if is_file_valid and (embed_meta or embed_art):
+                        if was_leader or self.active_workers_count <= 1:
+                            self.after(0, lambda: self.status_detail_label.configure(text="Status: Fetching studio metadata & album art..."))
+                        studio_meta = fetch_studio_metadata(artist_name, song_title)
+                        if studio_meta:
+                            enhanced_path = apply_studio_metadata_to_file(saved_file_path, studio_meta, ffmpeg_bin, embed_art=embed_art)
+                            if enhanced_path and os.path.exists(enhanced_path):
+                                saved_file_path = enhanced_path
+                                artist_name = studio_meta.get("artist") or artist_name
+                                song_title = studio_meta.get("title") or song_title
+
                     if was_leader or self.active_workers_count <= 1:
                         self.after(0, lambda a=artist_name, t=song_title: self.song_title_label.configure(text=f"🎵 {a} - {t}"))
                         self.after(0, lambda: self.status_detail_label.configure(text=f"Status: ✓ Successfully Saved ({tag_label})"))
@@ -1794,18 +2112,18 @@ class MusicDownloaderApp(ctk.CTk):
             self.latest_engine_version = latest
             self.after(0, lambda: self.update_btn.configure(
                 text=f"🔔 Update ({latest})",
-                fg_color="#EA580C",
-                hover_color="#C2410C",
+                fg_color=COLOR_ACCENT_BLUE,
+                hover_color=COLOR_ACCENT_BLUE_HOVER,
                 text_color="#FFFFFF"
             ))
         elif self.current_engine_version != "Not Installed":
             self.after(0, lambda: self.update_btn.configure(
                 text="✓ Up to Date",
-                fg_color="#1E293B",
-                border_color="#334155",
+                fg_color=COLOR_CONTROL_BG,
+                border_color=COLOR_CONTROL_BORDER,
                 border_width=1,
-                hover_color="#334155",
-                text_color="#94A3B8"
+                hover_color=COLOR_CONTROL_HOVER,
+                text_color=COLOR_TEXT_SECONDARY
             ))
 
     def on_check_update_clicked(self):
@@ -1826,32 +2144,35 @@ class MusicDownloaderApp(ctk.CTk):
         else:
             self.after(0, lambda: self.update_btn.configure(
                 text="✓ Up to Date",
-                fg_color="#1E293B",
-                border_color="#334155",
+                fg_color=COLOR_CONTROL_BG,
+                border_color=COLOR_CONTROL_BORDER,
                 border_width=1,
-                hover_color="#334155",
-                text_color="#94A3B8"
+                hover_color=COLOR_CONTROL_HOVER,
+                text_color=COLOR_TEXT_SECONDARY
             ))
             self.after(0, lambda: self.show_clipboard_toast(f"yt-dlp engine is on the latest version ({self.current_engine_version})!"))
 
     def _show_update_modal(self):
         modal = ctk.CTkToplevel(self)
         modal.title("Update Available")
-        modal.geometry("440x240")
+        modal.geometry("450x240")
         modal.resizable(False, False)
         modal.attributes('-topmost', True)
+        modal.configure(fg_color=COLOR_CARD_BG)
 
         ctk.CTkLabel(
             modal,
             text="🔔 yt-dlp Engine Update Available!",
-            font=ctk.CTkFont(size=16, weight="bold")
+            font=ctk.CTkFont(family=FONT_FAMILY, size=16, weight="bold"),
+            text_color=COLOR_TEXT_PRIMARY
         ).pack(pady=(20, 8))
 
         ctk.CTkLabel(
             modal,
             text=f"Current version: v{self.current_engine_version}\nLatest version: v{self.latest_engine_version}\n\nUpdating fixes YouTube extraction and throttled speeds.",
             justify="center",
-            font=ctk.CTkFont(size=12)
+            font=ctk.CTkFont(family=FONT_FAMILY, size=12),
+            text_color=COLOR_TEXT_SECONDARY
         ).pack(pady=4)
 
         btn_box = ctk.CTkFrame(modal, fg_color="transparent")
@@ -1866,32 +2187,42 @@ class MusicDownloaderApp(ctk.CTk):
         ctk.CTkButton(
             btn_box,
             text="Update Now",
-            fg_color="#2E7D32",
-            hover_color="#1B5E20",
-            font=ctk.CTkFont(weight="bold"),
+            fg_color=COLOR_ACCENT_BLUE,
+            hover_color=COLOR_ACCENT_BLUE_HOVER,
+            text_color="#FFFFFF",
+            font=ctk.CTkFont(family=FONT_FAMILY, size=12, weight="bold"),
+            corner_radius=8,
             command=perform_update
         ).pack(side="left", padx=6)
 
         ctk.CTkButton(
             btn_box,
             text="GitHub Page",
-            fg_color="#1E293B",
-            border_color="#334155",
+            fg_color=COLOR_CONTROL_BG,
+            border_color=COLOR_CONTROL_BORDER,
             border_width=1,
-            hover_color="#334155",
+            hover_color=COLOR_CONTROL_HOVER,
+            text_color=COLOR_TEXT_PRIMARY,
+            font=ctk.CTkFont(family=FONT_FAMILY, size=12),
+            corner_radius=8,
             command=self.open_github_repo
         ).pack(side="left", padx=6)
 
         ctk.CTkButton(
             btn_box,
             text="Later",
-            fg_color="#455A64",
-            hover_color="#37474F",
+            fg_color=COLOR_CONTROL_BG,
+            border_color=COLOR_CONTROL_BORDER,
+            border_width=1,
+            hover_color=COLOR_CONTROL_HOVER,
+            text_color=COLOR_TEXT_SECONDARY,
+            font=ctk.CTkFont(family=FONT_FAMILY, size=12),
+            corner_radius=8,
             command=modal.destroy
         ).pack(side="left", padx=6)
 
     def _execute_standalone_update(self):
-        target_binary = os.path.join(BIN_DIR, "yt-dlp.exe")
+        target_binary = get_ytdlp_path() or os.path.join(BIN_DIR, "yt-dlp.exe")
         temp_binary = target_binary + ".new"
 
         try:
@@ -1915,13 +2246,16 @@ class MusicDownloaderApp(ctk.CTk):
             self.current_engine_version = new_version
 
             self.after(0, lambda: self.engine_label.configure(
-                text=f"Engine: yt-dlp v{self.current_engine_version}",
-                text_color="#90CAF9"
+                text=f"● Ready • yt-dlp v{self.current_engine_version}",
+                text_color=COLOR_ACCENT_BLUE_TEXT
             ))
             self.after(0, lambda: self.update_btn.configure(
                 text="✓ Up to Date",
-                fg_color="#37474F",
-                hover_color="#455A64",
+                fg_color=COLOR_CONTROL_BG,
+                border_color=COLOR_CONTROL_BORDER,
+                border_width=1,
+                hover_color=COLOR_CONTROL_HOVER,
+                text_color=COLOR_TEXT_SECONDARY,
                 state="normal"
             ))
             self.after(0, lambda: self.status_detail_label.configure(text=f"Status: ✓ Successfully updated to yt-dlp v{new_version}!"))
@@ -1935,7 +2269,7 @@ class MusicDownloaderApp(ctk.CTk):
 
     # --- Window Close & Tray Minimization ---
     def on_close(self):
-        if self.tray_icon:
+        if self.tray_icon and self.config.get("minimize_to_tray", True):
             self.withdraw()
             self.show_tray_notification("OneTapTube Minimized", "OneTapTube is running in the background and listening for copied links.")
         else:
